@@ -9,9 +9,9 @@ import logging
 
 # Конфигурация
 CONFIG = {
-    "HR_CHAT_ID": "1956559043",
+    "HR_CHAT_ID": "",
     "DB_URL": "postgresql://postgres:1234@localhost:5432/zxc",
-    "TELEGRAM_TOKEN": "7944786474:AAGEDzyqsAS-weWVz1hiU3g1HsRJ5qX8Ce8"
+    "TELEGRAM_TOKEN": ""
 }
 
 # Настройка логирования
