@@ -10,7 +10,7 @@ import logging
 # Конфигурация
 CONFIG = {
     "HR_CHAT_ID": "",
-    "DB_URL": "postgresql://postgres:1234@localhost:5432/zxc",
+    "DB_URL": "",
     "TELEGRAM_TOKEN": ""
 }
 
