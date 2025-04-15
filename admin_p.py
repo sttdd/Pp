@@ -15,7 +15,7 @@ from telebot import TeleBot
 
 # Конфигурация
 CONFIG = {
-    "DB_URL": "postgresql://postgres:1234@localhost:5432/zxc",
+    "DB_URL": "",
     "TELEGRAM_TOKEN": ""
 }
 
@@ -456,19 +456,34 @@ class AdminPanel(QMainWindow):
 
     def delete_user(self, user_id):
         logger.info(f"Удаление пользователя {user_id}")
-        reply = QMessageBox.question(self, "Подтверждение", f"Удалить пользователя {user_id}?", QMessageBox.Yes | QMessageBox.No)
+        reply = QMessageBox.question(self, "Подтверждение", f"Удалить пользователя {user_id}?",
+                                     QMessageBox.Yes | QMessageBox.No)
         if reply == QMessageBox.Yes:
+            session = SessionFactory()
             try:
-                self.session.query(Application).filter_by(user_id=user_id).delete()
-                self.session.query(Log).filter_by(user_id=user_id).delete()
-                self.session.query(User).filter_by(user_id=user_id).delete()
-                self.log_action(user_id, "Удаление пользователя администратором")
-                self.session.commit()
+                # Удаляем все связанные заявки пользователя
+                session.query(Application).filter_by(user_id=user_id).delete()
+
+                # Удаляем все логи пользователя
+                session.query(Log).filter_by(user_id=user_id).delete()
+
+                # Удаляем самого пользователя
+                user = session.query(User).filter_by(user_id=user_id).first()
+                if user:
+                    session.delete(user)
+                    self.log_action(user_id, "Удаление пользователя администратором")
+                    session.commit()
+                    QMessageBox.information(self, "Успех", f"Пользователь {user_id} удален")
+                else:
+                    QMessageBox.warning(self, "Предупреждение", f"Пользователь с ID {user_id} не найден")
+
                 self.show_users(self.current_page)
             except Exception as e:
-                self.session.rollback()
+                session.rollback()
                 logger.error(f"Ошибка при удалении пользователя: {e}")
-                QMessageBox.critical(self, "Ошибка", "Не удалось удалить пользователя")
+                QMessageBox.critical(self, "Ошибка", f"Не удалось удалить пользователя: {str(e)}")
+            finally:
+                session.close()
 
     def approve_application(self, app_id):
         logger.info(f"Одобрение заявки #{app_id}")
@@ -606,33 +621,128 @@ class AdminPanel(QMainWindow):
             from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
             from reportlab.pdfbase import pdfmetrics
             from reportlab.pdfbase.ttfonts import TTFont
+            import os
 
-            # Регистрация шрифта
-            font_path = "DejaVuSans.ttf"
-            if os.path.exists(font_path):
-                pdfmetrics.registerFont(TTFont("DejaVuSans", font_path))
-            else:
-                raise FileNotFoundError("Шрифт DejaVuSans.ttf не найден")
+            # 1. Настройка шрифтов
+            try:
+                # Проверяем наличие шрифта в разных местах
+                font_paths = [
+                    "DejaVuSans.ttf",  # Текущая директория
+                    "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",  # Linux
+                    "C:/Windows/Fonts/DejaVuSans.ttf"  # Windows
+                ]
 
+                found_font = None
+                for path in font_paths:
+                    if os.path.exists(path):
+                        found_font = path
+                        break
+
+                if not found_font:
+                    raise FileNotFoundError("Шрифт DejaVuSans.ttf не найден")
+
+                # Регистрируем шрифты
+                pdfmetrics.registerFont(TTFont('DejaVuSans', found_font))
+                pdfmetrics.registerFont(TTFont('DejaVuSans-Bold', found_font))  # Используем тот же файл для bold
+
+                # Создаем кастомные стили
+                styles = getSampleStyleSheet()
+                styles.add(ParagraphStyle(
+                    name='DejaVuNormal',
+                    fontName='DejaVuSans',
+                    fontSize=10,
+                    leading=12,
+                    encoding='UTF-8'
+                ))
+                styles.add(ParagraphStyle(
+                    name='DejaVuTitle',
+                    fontName='DejaVuSans-Bold',
+                    fontSize=14,
+                    leading=16,
+                    spaceAfter=12,
+                    encoding='UTF-8'
+                ))
+
+            except Exception as font_error:
+                logger.error(f"Ошибка шрифтов: {font_error}", exc_info=True)
+                QMessageBox.critical(
+                    self,
+                    "Ошибка шрифтов",
+                    "Не удалось загрузить шрифты. Убедитесь, что файл DejaVuSans.ttf доступен."
+                )
+                return
+
+            # 2. Запрос места сохранения
+            filename, _ = QFileDialog.getSaveFileName(
+                self,
+                "Сохранить отчет",
+                f"{title.replace(' ', '_')}.pdf",
+                "PDF Files (*.pdf)"
+            )
+
+            if not filename:
+                return
+
+            if not filename.lower().endswith('.pdf'):
+                filename += '.pdf'
+
+            # 3. Генерация PDF
             buffer = io.BytesIO()
-            doc = SimpleDocTemplate(buffer, pagesize=A4)
-            styles = getSampleStyleSheet()
-            styles.add(ParagraphStyle(name='CustomTitle', fontName='DejaVuSans', fontSize=14))
-            styles.add(ParagraphStyle(name='CustomNormal', fontName='DejaVuSans', fontSize=10))
-            story = [Paragraph(title, styles['CustomTitle']), Spacer(1, 12)]
+            doc = SimpleDocTemplate(
+                buffer,
+                pagesize=A4,
+                encoding='UTF-8'
+            )
+
+            story = []
+
+            # Добавляем заголовок
+            story.append(Paragraph(title, styles['DejaVuTitle']))
+            story.append(Spacer(1, 12))
+
+            # Добавляем содержимое
             for line in content_lines:
-                story.append(Paragraph(line, styles['CustomNormal']))
-                story.append(Spacer(1, 6))
-            doc.build(story)
-            buffer.seek(0)
-            filename = QFileDialog.getSaveFileName(self, "Сохранить отчет", f"{title}.pdf", "Файлы PDF (*.pdf)")[0]
-            if filename:
+                if line:  # Пропускаем пустые строки
+                    story.append(Paragraph(str(line), styles['DejaVuNormal']))
+                    story.append(Spacer(1, 6))
+
+            try:
+                doc.build(story)
+            except Exception as build_error:
+                logger.error(f"Ошибка построения PDF: {build_error}", exc_info=True)
+                QMessageBox.critical(
+                    self,
+                    "Ошибка генерации",
+                    f"Не удалось сгенерировать PDF:\n{build_error}"
+                )
+                return
+
+            # 4. Сохранение файла
+            try:
                 with open(filename, 'wb') as f:
-                    f.write(buffer.read())
-                QMessageBox.information(self, "Успех", "Отчет сохранен")
+                    f.write(buffer.getvalue())
+
+                logger.info(f"Отчет успешно сохранен: {filename}")
+                QMessageBox.information(
+                    self,
+                    "Успех",
+                    f"Отчет сохранен:\n{filename}"
+                )
+            except Exception as io_error:
+                logger.error(f"Ошибка сохранения: {io_error}", exc_info=True)
+                QMessageBox.critical(
+                    self,
+                    "Ошибка сохранения",
+                    f"Не удалось сохранить файл:\n{io_error}"
+                )
+
         except Exception as e:
-            logger.error(f"Ошибка при генерации отчета: {e}")
-            QMessageBox.critical(self, "Ошибка", "Не удалось сгенерировать отчет")
+            logger.error(f"Критическая ошибка: {e}", exc_info=True)
+            QMessageBox.critical(
+                self,
+                "Ошибка",
+                f"Произошла непредвиденная ошибка:\n{e}"
+            )
 
     def closeEvent(self, event):
         logger.info("Закрытие админ-панели")
